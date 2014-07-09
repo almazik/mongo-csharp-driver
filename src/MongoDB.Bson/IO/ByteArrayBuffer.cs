@@ -449,24 +449,18 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
-        /// Writes bytes.
+        /// Copies <paramref name="count"/> bytes from <paramref name="source"/> starting from specified <paramref name="offset"/>, to the buffer at the poistion <paramref name="position"/>.
         /// </summary>
-        /// <param name="position">The position.</param>
-        /// <param name="source">The bytes (in the form of a byte array).</param>
-        /// <param name="offset">The offset.</param>
-        /// <param name="count">The count.</param>
+        /// <param name="position">The position in this <see cref="ByteArrayBuffer"/> to copy bytes to.</param>
+        /// <param name="source">The source array to copy bytes from.</param>
+        /// <param name="offset">The zero-based byte offset into <paramref name="source"/>.</param>
+        /// <param name="count">The number of bytes to copy.</param>
         /// <exception cref="System.ArgumentOutOfRangeException">
-        /// position;Position is outside of the buffer.
-        /// or
-        /// offset;Offset is outside of the source.
+        /// Thrown if position is outside of the buffer, or the offset is outside of the source.
         /// </exception>
-        /// <exception cref="System.ArgumentNullException">source</exception>
+        /// <exception cref="System.ArgumentNullException">Thrown if source is null</exception>
         /// <exception cref="System.ArgumentException">
-        /// Count is negative.;count
-        /// or
-        /// Count extends past the end of the buffer.;count
-        /// or
-        /// Count extends past the end of the source.;count
+        /// Thrown if count is negative, or count extends past the end of the buffer, or count extends past the end of the source.
         /// </exception>
         public void WriteBytes(int position, byte[] source, int offset, int count)
         {
@@ -501,7 +495,7 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
-        /// Writes Length bytes from this buffer starting at Position 0 to a stream.
+        /// Writes <see cref="Length"/> bytes from this buffer starting at Position 0 to a stream.
         /// </summary>
         /// <param name="stream">The stream.</param>
         /// <exception cref="System.ObjectDisposedException">ByteArrayBuffer</exception>
