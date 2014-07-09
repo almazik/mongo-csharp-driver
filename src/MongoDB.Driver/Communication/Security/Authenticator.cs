@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver.Communication.Security.Mechanisms;
@@ -66,26 +67,55 @@ namespace MongoDB.Driver.Communication.Security
                 return;
             }
 
-            if (!IsArbiter())
+            if (IsArbiter())
             {
-                foreach (var credential in _credentials)
-                {
-                    Authenticate(credential);
-                }
+                return;
+            }
+
+            foreach (var credential in _credentials)
+            {
+                Authenticate(credential);
+            }
+        }
+
+        /// <summary>
+        /// Authenticates the specified connection.
+        /// </summary>
+        public async Task AuthenticateAsync()
+        {
+            if (!_credentials.Any())
+            {
+                return;
+            }
+
+            if (await IsArbiterAsync().ConfigureAwait(false))
+            {
+                return;
+            }
+
+            foreach (var credential in _credentials)
+            {
+                await AuthenticateAsync(credential).ConfigureAwait(false);
             }
         }
 
         // private methods
         private void Authenticate(MongoCredential credential)
         {
-            foreach (var clientSupportedProtocol in __clientSupportedProtocols)
-            {
-                if (clientSupportedProtocol.CanUse(credential))
-                {
-                    clientSupportedProtocol.Authenticate(_connection, credential);
-                    return;
-                }
-            }
+            GetClientSupportedProtocol(credential).Authenticate(_connection, credential);
+        }
+
+        private Task AuthenticateAsync(MongoCredential credential)
+        {
+            return GetClientSupportedProtocol(credential).AuthenticateAsync(_connection, credential);
+        }
+
+        private static IAuthenticationProtocol GetClientSupportedProtocol(MongoCredential credential)
+        {
+            var clientSupportedProtocol = __clientSupportedProtocols.FirstOrDefault(protocol => protocol.CanUse(credential));
+
+            if (clientSupportedProtocol != null)
+                return clientSupportedProtocol;
 
             var message = string.Format("Unable to find a protocol to authenticate. The credential for source {0}, username {1} over mechanism {2} could not be authenticated.", credential.Source, credential.Username, credential.Mechanism);
             throw new MongoSecurityException(message);
@@ -93,19 +123,27 @@ namespace MongoDB.Driver.Communication.Security
 
         private bool IsArbiter()
         {
-            var command = new CommandDocument("isMaster", true);
-            var result = RunCommand(_connection, "admin", command);
+            var operation = CreateIsMasterCommandOperation();
+            var result = operation.Execute(_connection);
             return result.Response.GetValue("arbiterOnly", false).ToBoolean();
         }
 
-        private CommandResult RunCommand(MongoConnection connection, string databaseName, IMongoCommand command)
+        private async Task<bool> IsArbiterAsync()
+        {
+            var operation = CreateIsMasterCommandOperation();
+            var result = await operation.ExecuteAsync(_connection).ConfigureAwait(false);
+            return result.Response.GetValue("arbiterOnly", false).ToBoolean();
+        }
+
+        private static CommandOperation<CommandResult> CreateIsMasterCommandOperation()
         {
             var readerSettings = new BsonBinaryReaderSettings();
             var writerSettings = new BsonBinaryWriterSettings();
+            var command = new CommandDocument("isMaster", true);
             var resultSerializer = BsonSerializer.LookupSerializer<CommandResult>();
 
             var commandOperation = new CommandOperation<CommandResult>(
-                databaseName,
+                "admin", //databaseName
                 readerSettings,
                 writerSettings,
                 command,
@@ -113,8 +151,7 @@ namespace MongoDB.Driver.Communication.Security
                 null, // options
                 null, // readPreference
                 resultSerializer);
-
-            return commandOperation.Execute(connection);
+            return commandOperation;
         }
     }
 }

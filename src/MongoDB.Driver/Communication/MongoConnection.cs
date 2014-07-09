@@ -333,8 +333,8 @@ namespace MongoDB.Driver.Internal
             _stream = stream;
             _state = MongoConnectionState.Open;
 
-            new Authenticator(this, _serverInstance.Settings.Credentials)
-                .Authenticate();
+            await new Authenticator(this, _serverInstance.Settings.Credentials)
+                .AuthenticateAsync().ConfigureAwait(false);
         }
 
         internal MongoReplyMessage<TDocument> ReceiveMessage<TDocument>(
