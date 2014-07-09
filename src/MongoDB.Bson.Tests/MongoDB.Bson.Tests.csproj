@@ -87,6 +87,7 @@
       <Link>SkipOnMonoAttribute.cs</Link>
     </Compile>
     <Compile Include="BsonExtensionMethodsTests.cs" />
+    <Compile Include="IO\BsonStreamReaderTests.cs" />
     <Compile Include="BsonUtilsTests.cs" />
     <Compile Include="IO\BsonWriterTests.cs" />
     <Compile Include="IO\ByteArrayBufferTests.cs" />

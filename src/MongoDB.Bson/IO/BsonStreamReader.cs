@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace MongoDB.Bson.IO
 {
@@ -96,7 +97,7 @@ namespace MongoDB.Bson.IO
         /// </summary>
         /// <returns>A bool.</returns>
         /// <exception cref="System.ArgumentNullException">stream</exception>
-        /// <exception cref="System.IO.EndOfStreamException"></exception>
+        /// <exception cref="System.IO.EndOfStreamException">Thrown if stream is empty.</exception>
         public bool ReadBoolean()
         {
             var b = _stream.ReadByte();
@@ -108,12 +109,25 @@ namespace MongoDB.Bson.IO
             return b != 0;
         }
 
+        // public methods
+        /// <summary>
+        /// Reads a BSON boolean from the stream.
+        /// </summary>
+        /// <returns>A bool.</returns>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        /// <exception cref="System.IO.EndOfStreamException">Thrown if stream is empty.</exception>
+        public async Task<bool> ReadBooleanAsync()
+        {
+            var b = await ReadByteAsync().ConfigureAwait(false);
+            return b != 0;
+        }
+
         /// <summary>
         /// Reads a BSON type code from the stream.
         /// </summary>
         /// <returns>A BsonType.</returns>
         /// <exception cref="System.ArgumentNullException">stream</exception>
-        /// <exception cref="System.IO.EndOfStreamException"></exception>
+        /// <exception cref="System.IO.EndOfStreamException">Thrown if stream is empty.</exception>
         /// <exception cref="System.FormatException"></exception>
         public BsonType ReadBsonType()
         {
@@ -132,12 +146,41 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
+        /// Asynchronously reads a BSON type code from the stream.
+        /// </summary>
+        /// <returns>A BsonType.</returns>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        /// <exception cref="System.IO.EndOfStreamException">Thrown if stream is empty.</exception>
+        /// <exception cref="System.FormatException"></exception>
+        public async Task<BsonType> ReadBsonTypeAsync()
+        {
+            var b = await ReadByteAsync().ConfigureAwait(false);
+            if (!__validBsonTypes[b])
+            {
+                string message = string.Format("Invalid BsonType: {0}.", b);
+                throw new FormatException(message);
+            }
+
+            return (BsonType)b;
+        }
+
+        /// <summary>
         /// Reads a BSON CString from the stream.
         /// </summary>
         /// <returns>A string.</returns>
         public string ReadCString()
         {
             var utf8 = ReadCStringBytes();
+            return Utf8Helper.DecodeUtf8String(utf8.Array, utf8.Offset, utf8.Count, Utf8Helper.StrictUtf8Encoding);
+        }
+
+        /// <summary>
+        /// Asynchronously reads a BSON CString from the stream.
+        /// </summary>
+        /// <returns>A string.</returns>
+        public async Task<string> ReadCStringAsync()
+        {
+            var utf8 = await ReadCStringBytesAsync().ConfigureAwait(false);
             return Utf8Helper.DecodeUtf8String(utf8.Array, utf8.Offset, utf8.Count, Utf8Helper.StrictUtf8Encoding);
         }
 
@@ -172,6 +215,33 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
+        /// Asynchronously reads a BSON CString from the stream.
+        /// </summary>
+        /// <returns>An ArraySegment containing the CString bytes (without the null byte).</returns>
+        public async Task<ArraySegment<byte>> ReadCStringBytesAsync()
+        {
+            if (_bsonStream != null)
+            {
+                return _bsonStream.ReadBsonCStringBytes();
+            }
+            else
+            {
+                var memoryStream = new MemoryStream(32); // override default capacity of zero
+
+                while (true)
+                {
+                    await FillBufferAsync(1).ConfigureAwait(false);
+                    var b = _buffer[0];
+                    if (b == 0)
+                    {
+                        return new ArraySegment<byte>(memoryStream.GetBuffer(), 0, (int)memoryStream.Length); // without the null byte
+                    }
+                    memoryStream.WriteByte(b);
+                }
+            }
+        }
+
+        /// <summary>
         /// Reads a BSON double from the stream.
         /// </summary>
         /// <returns>A double.</returns>
@@ -190,6 +260,24 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
+        /// Asynchronously reads a BSON double from the stream.
+        /// </summary>
+        /// <returns>A double.</returns>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public async Task<double> ReadDoubleAsync()
+        {
+            if (_bsonStream != null)
+            {
+                return _bsonStream.ReadBsonDouble();
+            }
+            else
+            {
+                await FillBufferAsync(8).ConfigureAwait(false);
+                return BitConverter.ToDouble(_buffer, 0);
+            }
+        }
+
+        /// <summary>
         /// Reads a 32-bit BSON integer from the stream.
         /// </summary>
         /// <returns>An int.</returns>
@@ -203,6 +291,24 @@ namespace MongoDB.Bson.IO
             else
             {
                 FillBuffer(4);
+                return _buffer[0] | (_buffer[1] << 8) | (_buffer[2] << 16) | (_buffer[3] << 24);
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously reads a 32-bit BSON integer from the stream.
+        /// </summary>
+        /// <returns>An int.</returns>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public async Task<int> ReadInt32Async()
+        {
+            if (_bsonStream != null)
+            {
+                return _bsonStream.ReadBsonInt32();
+            }
+            else
+            {
+                await FillBufferAsync(4).ConfigureAwait(false);
                 return _buffer[0] | (_buffer[1] << 8) | (_buffer[2] << 16) | (_buffer[3] << 24);
             }
         }
@@ -228,6 +334,26 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
+        /// Asynchronously reads a 64-bit BSON integer from the stream.
+        /// </summary>
+        /// <returns>A long.</returns>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public async Task<long> ReadInt64Async()
+        {
+            if (_bsonStream != null)
+            {
+                return _bsonStream.ReadBsonInt64();
+            }
+            else
+            {
+                await FillBufferAsync(8).ConfigureAwait(false);
+                var lo = (uint)(_buffer[0] | (_buffer[1] << 8) | (_buffer[2] << 16) | (_buffer[3] << 24));
+                var hi = (uint)(_buffer[4] | (_buffer[5] << 8) | (_buffer[6] << 16) | (_buffer[7] << 24));
+                return (long)(((ulong)hi << 32) | (ulong)lo);
+            }
+        }
+
+        /// <summary>
         /// Reads a BSON ObjectId from the stream.
         /// </summary>
         /// <returns>An ObjectId.</returns>
@@ -241,6 +367,24 @@ namespace MongoDB.Bson.IO
             else
             {
                 FillBuffer(12);
+                return new ObjectId(_buffer, 0);
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously reads a BSON ObjectId from the stream.
+        /// </summary>
+        /// <returns>An ObjectId.</returns>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public async Task<ObjectId> ReadObjectIdAsync()
+        {
+            if (_bsonStream != null)
+            {
+                return _bsonStream.ReadBsonObjectId();
+            }
+            else
+            {
+                await FillBufferAsync(12).ConfigureAwait(false);
                 return new ObjectId(_buffer, 0);
             }
         }
@@ -284,23 +428,73 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
+        /// Asynchronously reads a BSON string from the stream.
+        /// </summary>
+        /// 
+        /// <returns>A string.</returns>
+        /// <exception cref="System.ArgumentNullException">
+        /// stream
+        /// or
+        /// encoding
+        /// </exception>
+        /// <exception cref="System.FormatException">
+        /// String is missing null terminator byte.
+        /// </exception>
+        public async Task<string> ReadStringAsync()
+        {
+            if (_bsonStream != null)
+            {
+                return _bsonStream.ReadBsonString(_encoding);
+            }
+            else
+            {
+                var length = await ReadInt32Async().ConfigureAwait(false);
+                if (length < 1)
+                {
+                    var message = string.Format("Invalid string length: {0}.", length);
+                    throw new FormatException(message);
+                }
+
+                var bytes = await ReadBytesAsync(length).ConfigureAwait(false); // read the null byte also (included in length)
+                if (bytes[length - 1] != 0)
+                {
+                    throw new FormatException("String is missing terminating null byte.");
+                }
+
+                return Utf8Helper.DecodeUtf8String(bytes, 0, length - 1, _encoding); // don't decode the null byte
+            }
+        }
+
+        /// <summary>
         /// Reads a byte.
         /// </summary>
-        /// <returns>A byte.</returns>
+        /// <returns>A byte that was read from the stream, or <c>-1</c> if the stream is empty.</returns>
         public int ReadByte()
         {
             return _stream.ReadByte();
         }
 
         /// <summary>
-        /// Reads bytes from the stream and stores them in an existing buffer. Throws EndOfStreamException if not enough bytes are available.
+        /// Asynchronously reads a byte.
+        /// </summary>
+        /// <returns>A byte.</returns>
+        /// <exception cref="System.IO.EndOfStreamException">Thrown if stream is empty.</exception>
+        /// <remarks>Note that behavior at the end of the stream is different to <see cref="ReadByte"/> method.</remarks>
+        public async Task<int> ReadByteAsync()
+        {
+            await FillBufferAsync(1).ConfigureAwait(false);
+            return _buffer[0];
+        }
+
+        /// <summary>
+        /// Reads bytes from the stream and stores them in an existing buffer.
         /// </summary>
         /// <param name="buffer">The buffer.</param>
         /// <param name="offset">The offset in the buffer at which to start storing the bytes being read.</param>
         /// <param name="count">The count.</param>
         /// <exception cref="System.ArgumentNullException">stream</exception>
-        /// <exception cref="System.ArgumentException">Count cannot be negative.;count</exception>
-        /// <exception cref="System.IO.EndOfStreamException"></exception>
+        /// <exception cref="System.ArgumentException">Thrown if <paramref name="count"/> is negative.</exception>
+        /// <exception cref="System.IO.EndOfStreamException">Thrown if not enough bytes are available.</exception>
         public void ReadBytes(byte[] buffer, int offset, int count)
         {
             if (count < 0)
@@ -321,13 +515,13 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
-        /// Reads bytes from the stream. Throws EndOfStreamException if not enough bytes are available.
+        /// Reads bytes from the stream.
         /// </summary>
         /// <param name="count">The count.</param>
         /// <returns>A byte array.</returns>
         /// <exception cref="System.ArgumentNullException">stream</exception>
-        /// <exception cref="System.ArgumentException">Count cannot be negative.;count</exception>
-        /// <exception cref="System.IO.EndOfStreamException"></exception>
+        /// <exception cref="System.ArgumentException">Thrown if <paramref name="count"/> is negative.</exception>
+        /// <exception cref="System.IO.EndOfStreamException">Thrown if not enough bytes are available.</exception>
         public byte[] ReadBytes(int count)
         {
             if (count < 0)
@@ -336,17 +530,55 @@ namespace MongoDB.Bson.IO
             }
 
             var bytes = new byte[count];
-            var offset = 0;
-            while (offset < count)
+            ReadBytes(bytes, 0, count);
+            return bytes;
+        }
+
+        /// <summary>
+        /// Asynchronously reads bytes from the stream and stores them in an existing buffer.
+        /// </summary>
+        /// <param name="buffer">The buffer.</param>
+        /// <param name="offset">The offset in the buffer at which to start storing the bytes being read.</param>
+        /// <param name="count">The count.</param>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        /// <exception cref="System.ArgumentException">Thrown if <paramref name="count"/> is negative.</exception>
+        /// <exception cref="System.IO.EndOfStreamException">Thrown if not enough bytes are available.</exception>
+        public async Task ReadBytesAsync(byte[] buffer, int offset, int count)
+        {
+            if (count < 0)
             {
-                var read = _stream.Read(bytes, offset, count - offset);
+                throw new ArgumentException("Count cannot be negative.", "count");
+            }
+
+            while (count > 0)
+            {
+                var read = await _stream.ReadAsync(buffer, offset, count).ConfigureAwait(false);
                 if (read == 0)
                 {
                     throw new EndOfStreamException();
                 }
                 offset += read;
+                count -= read;
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously reads bytes from the stream.
+        /// </summary>
+        /// <param name="count">The count.</param>
+        /// <returns>A byte array.</returns>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        /// <exception cref="System.ArgumentException">Thrown if <paramref name="count"/> is negative.</exception>
+        /// <exception cref="System.IO.EndOfStreamException">Thrown if not enough bytes are available.</exception>
+        public async Task<byte[]> ReadBytesAsync(int count)
+        {
+            if (count < 0)
+            {
+                throw new ArgumentException("Count cannot be negative.", "count");
             }
 
+            var bytes = new byte[count];
+            await ReadBytesAsync(bytes, 0, count).ConfigureAwait(false);
             return bytes;
         }
 
@@ -370,6 +602,29 @@ namespace MongoDB.Bson.IO
                         throw new EndOfStreamException();
                     }
                     else if (b == 0)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously skips over a BSON CString positioning the stream to just after the terminating null byte.
+        /// </summary>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public async Task SkipCStringAsync()
+        {
+            if (_bsonStream != null)
+            {
+                _bsonStream.SkipBsonCString();
+            }
+            else
+            {
+                while (true)
+                {
+                    await FillBufferAsync(1).ConfigureAwait(false);
+                    if (_buffer[0] == 0)
                     {
                         break;
                     }
@@ -403,6 +658,22 @@ namespace MongoDB.Bson.IO
                 }
                 while (offset < count);
             }
+        }
+
+        // private methods
+        private async Task FillBufferAsync(int count)
+        {
+            var offset = 0;
+            do
+            {
+                var read = await _stream.ReadAsync(_buffer, offset, count - offset).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    throw new EndOfStreamException();
+                }
+                offset += read;
+            }
+            while (offset < count);
         }
     }
 }
