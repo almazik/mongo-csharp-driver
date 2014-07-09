@@ -15,6 +15,7 @@
 
 using System;
 using System.IO;
+using System.Threading.Tasks;
 
 namespace MongoDB.Bson.IO
 {
@@ -304,6 +305,54 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
+        /// Asynchronously loads the buffer from a stream.
+        /// </summary>
+        /// <param name="stream">The stream.</param>
+        /// <param name="position">The position.</param>
+        /// <param name="count">The count.</param>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        /// <exception cref="System.ArgumentOutOfRangeException">position;Position is outside of the buffer.</exception>
+        /// <exception cref="System.ArgumentException">
+        /// Count is negative.;count
+        /// or
+        /// Count extends past the end of the buffer.;count
+        /// </exception>
+        /// <exception cref="System.IO.EndOfStreamException"></exception>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        public async Task LoadFromAsync(Stream stream, int position, int count)
+        {
+            ThrowIfDisposed();
+            if (stream == null)
+            {
+                throw new ArgumentNullException("stream");
+            }
+            if (position < 0 || position > _length)
+            {
+                throw new ArgumentOutOfRangeException("position", "Position is outside of the buffer.");
+            }
+            if (count < 0)
+            {
+                throw new ArgumentException("Count is negative.", "count");
+            }
+            if (position + count > _length)
+            {
+                throw new ArgumentException("Count extends past the end of the buffer.", "count");
+            }
+            EnsureIsWritable();
+
+            while (count > 0)
+            {
+                var bytesRead = await stream.ReadAsync(_bytes, _origin + position, count).ConfigureAwait(false);
+                if (bytesRead == 0)
+                {
+                    throw new EndOfStreamException();
+                }
+                position += bytesRead;
+                count -= bytesRead;
+            }
+        }
+
+        /// <summary>
         /// Makes this buffer read only.
         /// </summary>
         /// <exception cref="System.ObjectDisposedException">ByteArrayBuffer</exception>
@@ -465,6 +514,23 @@ namespace MongoDB.Bson.IO
             }
 
             stream.Write(_bytes, _origin, _length);
+        }
+
+        /// <summary>
+        /// Asynchronously writes <see cref="Length"/> bytes from this buffer starting at Position 0 to a stream.
+        /// </summary>
+        /// <param name="stream">The stream.</param>
+        /// <exception cref="System.ObjectDisposedException">ByteArrayBuffer</exception>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        public Task WriteToAsync(Stream stream)
+        {
+            ThrowIfDisposed();
+            if (stream == null)
+            {
+                throw new ArgumentNullException("stream");
+            }
+
+            return stream.WriteAsync(_bytes, _origin, _length);
         }
 
         // protected methods

@@ -15,6 +15,7 @@
 
 using System;
 using System.IO;
+using System.Threading.Tasks;
 
 namespace MongoDB.Bson.IO
 {
@@ -91,6 +92,15 @@ namespace MongoDB.Bson.IO
         void LoadFrom(Stream stream, int position, int count);
 
         /// <summary>
+        /// Loads the buffer from a stream.
+        /// </summary>
+        /// <param name="stream">The stream.</param>
+        /// <param name="position">The position.</param>
+        /// <param name="count">The count.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        Task LoadFromAsync(Stream stream, int position, int count);
+
+        /// <summary>
         /// Makes this buffer read only.
         /// </summary>
         void MakeReadOnly();
@@ -119,7 +129,7 @@ namespace MongoDB.Bson.IO
         void WriteByte(int position, byte value);
 
         /// <summary>
-        /// Writes bytes.
+        /// Writes bytes to the buffer.
         /// </summary>
         /// <param name="position">The position.</param>
         /// <param name="source">The bytes (in the form of a byte array).</param>
@@ -132,5 +142,12 @@ namespace MongoDB.Bson.IO
         /// </summary>
         /// <param name="stream">The stream.</param>
         void WriteTo(Stream stream);
+
+        /// <summary>
+        /// Asynchronously writes the contents of this buffer to a stream.
+        /// </summary>
+        /// <param name="stream">The stream.</param>
+        /// <returns>A task that represents the asynchronous write operation.</returns>
+        Task WriteToAsync(Stream stream);
     }
 }

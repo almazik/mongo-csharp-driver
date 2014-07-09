@@ -13,6 +13,9 @@
 * limitations under the License.
 */
 
+using System;
+using System.IO;
+using System.Threading.Tasks;
 using MongoDB.Bson.IO;
 using NUnit.Framework;
 
@@ -44,6 +47,82 @@ namespace MongoDB.Bson.Tests.IO
                 buffer.MakeReadOnly();
                 var slice = buffer.GetSlice(chunkSize, chunkSize + 1);
                 Assert.IsInstanceOf<MultiChunkBuffer>(slice);
+            }
+        }
+
+        [Test]
+        public void TestWriteTo()
+        {
+            var expected = new byte[] { 1, 2, 3, 4, 5 };
+
+            var chunkSize = BsonChunkPool.Default.ChunkSize;
+            var length = chunkSize * 3;
+            using (var buffer = ByteBufferFactory.Create(BsonChunkPool.Default, length))
+            using (var memoryStream = new MemoryStream())
+            {
+                buffer.WriteBytes(0, expected, 0, 5);
+                buffer.Length = 5;
+
+                buffer.WriteTo(memoryStream);
+                Assert.AreEqual(5, memoryStream.Length);
+                Assert.AreEqual(expected, memoryStream.ToArray());
+            }
+        }
+
+        [Test]
+        public void TestLoadFrom()
+        {
+            var expected = new byte[] { 1, 2, 3, 4, 5 };
+
+            var chunkSize = BsonChunkPool.Default.ChunkSize;
+            var length = chunkSize * 3;
+
+            using (var buffer = ByteBufferFactory.Create(BsonChunkPool.Default, length))
+            using (var memoryStream = new MemoryStream(expected))
+            {
+                buffer.LoadFrom(memoryStream, 10, 5);
+
+                var actual = new byte[5];
+                buffer.ReadBytes(10, actual, 0, 5);
+                Assert.AreEqual(expected, actual);
+            }
+        }
+
+        [Test]
+        public async Task TestWriteToAsync()
+        {
+            var expected = new byte[] { 1, 2, 3, 4, 5 };
+
+            var chunkSize = BsonChunkPool.Default.ChunkSize;
+            var length = chunkSize * 3;
+            using (var buffer = ByteBufferFactory.Create(BsonChunkPool.Default, length))
+            using (var memoryStream = new MemoryStream())
+            {
+                buffer.WriteBytes(0, expected, 0, 5);
+                buffer.Length = 5;
+
+                await buffer.WriteToAsync(memoryStream);
+                Assert.AreEqual(5, memoryStream.Length);
+                Assert.AreEqual(expected, memoryStream.ToArray());
+            }
+        }
+
+        [Test]
+        public async Task TestLoadFromAsync()
+        {
+            var expected = new byte[] { 1, 2, 3, 4, 5 };
+
+            var chunkSize = BsonChunkPool.Default.ChunkSize;
+            var length = chunkSize * 3;
+
+            using (var buffer = ByteBufferFactory.Create(BsonChunkPool.Default, length))
+            using (var memoryStream = new MemoryStream(expected))
+            {
+                await buffer.LoadFromAsync(memoryStream, 10, 5);
+
+                var actual = new byte[5];
+                buffer.ReadBytes(10, actual, 0, 5);
+                Assert.AreEqual(expected, actual);
             }
         }
     }

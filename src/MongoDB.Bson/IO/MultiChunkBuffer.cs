@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace MongoDB.Bson.IO
 {
@@ -348,6 +349,61 @@ namespace MongoDB.Bson.IO
             }
         }
 
+
+        /// <summary>
+        /// Asynchronously loads the buffer from a stream.
+        /// </summary>
+        /// <param name="stream">The stream.</param>
+        /// <param name="position">The position.</param>
+        /// <param name="count">The count.</param>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        /// <exception cref="System.ArgumentOutOfRangeException">count</exception>
+        /// <exception cref="System.ArgumentException">
+        /// Count is negative.;count
+        /// or
+        /// Count extends past the end of the buffer.;count
+        /// </exception>
+        /// <exception cref="System.IO.EndOfStreamException"></exception>
+        /// <exception cref="System.ObjectDisposedException">MultiChunkBuffer</exception>
+        /// <exception cref="System.InvalidOperationException">The MultiChunkBuffer is read only.</exception>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        public async Task LoadFromAsync(Stream stream, int position, int count)
+        {
+            ThrowIfDisposed();
+            if (stream == null)
+            {
+                throw new ArgumentNullException("stream");
+            }
+            if (position < 0 || position > _length)
+            {
+                throw new ArgumentOutOfRangeException("position", "Position is outside of the buffer.");
+            }
+            if (count < 0)
+            {
+                throw new ArgumentException("Count is negative.", "count");
+            }
+            if (position + count > _length)
+            {
+                throw new ArgumentException("Count extends past the end of the buffer.", "count");
+            }
+            EnsureIsWritable();
+
+            while (count > 0)
+            {
+                var chunkIndex = (_origin + position) / _chunkSize;
+                var chunkOffset = (_origin + position) % _chunkSize;
+                var chunkRemaining = _chunkSize - chunkOffset;
+                var bytesToRead = (count <= chunkRemaining) ? count : chunkRemaining;
+                var bytesRead = await stream.ReadAsync(_chunks[chunkIndex].Bytes, chunkOffset, bytesToRead).ConfigureAwait(false);
+                if (bytesRead == 0)
+                {
+                    throw new EndOfStreamException();
+                }
+                position += bytesRead;
+                count -= bytesRead;
+            }
+        }
+
         /// <summary>
         /// Makes this buffer read only.
         /// </summary>
@@ -523,7 +579,7 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
-        /// Writes Length bytes from this buffer starting at Position 0 to a stream.
+        /// Writes <see cref="Length"/> bytes from this buffer starting at Position 0 to a stream.
         /// </summary>
         /// <param name="stream">The stream.</param>
         /// <exception cref="System.ObjectDisposedException">MultiChunkBuffer</exception>
@@ -539,6 +595,29 @@ namespace MongoDB.Bson.IO
                 var chunkRemaining = _chunkSize - chunkOffset;
                 var bytesToWrite = (remaining < chunkRemaining) ? remaining : chunkRemaining;
                 stream.Write(_chunks[chunkIndex].Bytes, chunkOffset, bytesToWrite);
+                chunkIndex += 1;
+                chunkOffset = 0;
+                remaining -= bytesToWrite;
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously writes <see cref="Length"/> bytes from this buffer starting at Position 0 to a stream.
+        /// </summary>
+        /// <param name="stream">The stream.</param>
+        /// <exception cref="System.ObjectDisposedException">MultiChunkBuffer</exception>
+        public async Task WriteToAsync(Stream stream)
+        {
+            ThrowIfDisposed();
+
+            var chunkIndex = _origin / _chunkSize;
+            var chunkOffset = _origin % _chunkSize;
+            var remaining = _length;
+            while (remaining > 0)
+            {
+                var chunkRemaining = _chunkSize - chunkOffset;
+                var bytesToWrite = (remaining < chunkRemaining) ? remaining : chunkRemaining;
+                await stream.WriteAsync(_chunks[chunkIndex].Bytes, chunkOffset, bytesToWrite).ConfigureAwait(false);
                 chunkIndex += 1;
                 chunkOffset = 0;
                 remaining -= bytesToWrite;
