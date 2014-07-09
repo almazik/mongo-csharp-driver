@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 
 namespace MongoDB.Bson.IO
 {
@@ -79,6 +80,32 @@ namespace MongoDB.Bson.IO
             byteBuffer.Length = length;
             byteBuffer.WriteBytes(0, BitConverter.GetBytes(length), 0, 4);
             byteBuffer.LoadFrom(stream, 4, length - 4);
+            byteBuffer.MakeReadOnly();
+
+            return byteBuffer;
+        }
+
+        /// <summary>
+        /// Loads a byte buffer from a stream (the first 4 bytes in the stream are the length of the data).
+        /// Depending on the required capacity, either a SingleChunkBuffer or a MultiChunkBuffer will be created.
+        /// </summary>
+        /// <param name="stream">The stream.</param>
+        /// <returns>A buffer.</returns>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public static async Task<IByteBuffer> LoadLengthPrefixedDataFromAsync(Stream stream)
+        {
+            if (stream == null)
+            {
+                throw new ArgumentNullException("stream");
+            }
+
+            var streamReader = new BsonStreamReader(stream, Utf8Helper.StrictUtf8Encoding);
+            var length = await streamReader.ReadInt32Async();
+
+            var byteBuffer = Create(BsonChunkPool.Default, length);
+            byteBuffer.Length = length;
+            byteBuffer.WriteBytes(0, BitConverter.GetBytes(length), 0, 4);
+            await byteBuffer.LoadFromAsync(stream, 4, length - 4).ConfigureAwait(false);
             byteBuffer.MakeReadOnly();
 
             return byteBuffer;
