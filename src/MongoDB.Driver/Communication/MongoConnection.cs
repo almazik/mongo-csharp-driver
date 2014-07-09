@@ -52,14 +52,14 @@ namespace MongoDB.Driver.Internal
     public class MongoConnection
     {
         // private fields
-        private object _connectionLock = new object();
-        private MongoServerInstance _serverInstance;
-        private MongoConnectionPool _connectionPool;
-        private int _generationId; // the generationId of the connection pool at the time this connection was created
+        private readonly object _connectionLock = new object();
+        private readonly MongoServerInstance _serverInstance;
+        private readonly MongoConnectionPool _connectionPool;
+        private readonly int _generationId; // the generationId of the connection pool at the time this connection was created
         private MongoConnectionState _state;
         private TcpClient _tcpClient;
         private Stream _stream; // either a NetworkStream or an SslStream wrapping a NetworkStream
-        private DateTime _createdAt;
+        private readonly DateTime _createdAt;
         private DateTime _lastUsedAt; // set every time the connection is Released
         private int _messageCounter;
         private int _requestId;
