@@ -14,7 +14,6 @@
 */
 
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -28,6 +27,7 @@ namespace MongoDB.Bson.IO
     public class BsonStreamWriter
     {
         // private fields
+        private static readonly Task _completedTask = Task.FromResult(0);
         private readonly Stream _stream;
         private readonly IBsonStream _bsonStream;
         private readonly UTF8Encoding _encoding;
@@ -91,6 +91,16 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
+        /// Asynchronously writes a BSON boolean to the stream.
+        /// </summary>
+        /// <param name="value">The value.</param>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public Task WriteBooleanAsync(bool value)
+        {
+            return WriteByteAsync((byte)(value ? 1 : 0));
+        }
+
+        /// <summary>
         /// Writes a BSON type code to the stream.
         /// </summary>
         /// <param name="value">The value.</param>
@@ -98,6 +108,16 @@ namespace MongoDB.Bson.IO
         public void WriteBsonType(BsonType value)
         {
             _stream.WriteByte((byte)value);
+        }
+
+        /// <summary>
+        /// Asynchronously writes a BSON type code to the stream.
+        /// </summary>
+        /// <param name="value">The value.</param>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public Task WriteBsonTypeAsync(BsonType value)
+        {
+            return WriteByteAsync((byte)value);
         }
 
         /// <summary>
@@ -110,6 +130,16 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
+        /// Asynchronously writes a byte to the stream.
+        /// </summary>
+        /// <param name="value">The value.</param>
+        public Task WriteByteAsync(byte value)
+        {
+            var buf = new[] { value };
+            return _stream.WriteAsync(buf, 0, 1);
+        }
+
+        /// <summary>
         /// Writes bytes to the stream.
         /// </summary>
         /// <param name="value">The value.</param>
@@ -117,7 +147,16 @@ namespace MongoDB.Bson.IO
         {
             _stream.Write(value, 0, value.Length);
         }
-        
+
+        /// <summary>
+        /// Asynchronously writes bytes to the stream.
+        /// </summary>
+        /// <param name="value">The value.</param>
+        public Task WriteBytesAsync(byte[] value)
+        {
+            return _stream.WriteAsync(value, 0, value.Length);
+        }
+
         /// <summary>
         /// Writes a BSON CString to the stream.
         /// </summary>
@@ -152,6 +191,41 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
+        /// Asynchronously writes a BSON CString to the stream.
+        /// </summary>
+        /// <param name="value">The value.</param>
+        /// <exception cref="System.ArgumentNullException">
+        /// stream
+        /// or
+        /// encoding
+        /// </exception>
+        /// <exception cref="System.ArgumentException">UTF8 representation cannot contain null bytes when writing a BSON CString.;value</exception>
+        public Task WriteCStringAsync(string value)
+        {
+            if (value == null)
+            {
+                throw new ArgumentNullException("value");
+            }
+
+            if (_bsonStream != null)
+            {
+                _bsonStream.WriteBsonCString(value);
+                return _completedTask;
+            }
+            else
+            {
+                var buf = new byte[Utf8Helper.StrictUtf8Encoding.GetByteCount(value) + 1]; //plus additional terminating byte
+                Utf8Helper.StrictUtf8Encoding.GetBytes(value, 0, value.Length, buf, 0);
+
+                if (Array.IndexOf(buf, (byte)0) != buf.Length - 1)
+                {
+                    throw new ArgumentException("UTF8 representation cannot contain null bytes when writing a BSON CString.", "value");
+                }
+                return _stream.WriteAsync(buf, 0, buf.Length);
+            }
+        }
+
+        /// <summary>
         /// Writes a BSON double to the stream.
         /// </summary>
         /// <param name="value">The value.</param>
@@ -166,6 +240,25 @@ namespace MongoDB.Bson.IO
             {
                 var bytes = BitConverter.GetBytes(value);
                 _stream.Write(bytes, 0, 8);
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously writes a BSON double to the stream.
+        /// </summary>
+        /// <param name="value">The value.</param>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public Task WriteDoubleAsync(double value)
+        {
+            if (_bsonStream != null)
+            {
+                _bsonStream.WriteBsonDouble(value);
+                return _completedTask;
+            }
+            else
+            {
+                var bytes = BitConverter.GetBytes(value);
+                return _stream.WriteAsync(bytes, 0, 8);
             }
         }
 
@@ -188,6 +281,29 @@ namespace MongoDB.Bson.IO
                 bytes[2] = (byte)(value >> 16);
                 bytes[3] = (byte)(value >> 24);
                 _stream.Write(bytes, 0, 4);
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously writes a 32-bit BSON integer to the stream.
+        /// </summary>
+        /// <param name="value">The value.</param>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public Task WriteInt32Async(int value)
+        {
+            if (_bsonStream != null)
+            {
+                _bsonStream.WriteBsonInt32(value);
+                return _completedTask;
+            }
+            else
+            {
+                var bytes = new byte[4];
+                bytes[0] = (byte)value;
+                bytes[1] = (byte)(value >> 8);
+                bytes[2] = (byte)(value >> 16);
+                bytes[3] = (byte)(value >> 24);
+                return _stream.WriteAsync(bytes, 0, 4);
             }
         }
 
@@ -218,6 +334,33 @@ namespace MongoDB.Bson.IO
         }
 
         /// <summary>
+        /// Asynchronously writes a 64-bit BSON integer to the stream.
+        /// </summary>
+        /// <param name="value">The value.</param>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public Task WriteInt64Async(long value)
+        {
+            if (_bsonStream != null)
+            {
+                _bsonStream.WriteBsonInt64(value);
+                return _completedTask;
+            }
+            else
+            {
+                var bytes = new byte[8];
+                bytes[0] = (byte)value;
+                bytes[1] = (byte)(value >> 8);
+                bytes[2] = (byte)(value >> 16);
+                bytes[3] = (byte)(value >> 24);
+                bytes[4] = (byte)(value >> 32);
+                bytes[5] = (byte)(value >> 40);
+                bytes[6] = (byte)(value >> 48);
+                bytes[7] = (byte)(value >> 56);
+                return _stream.WriteAsync(bytes, 0, 8);
+            }
+        }
+
+        /// <summary>
         /// Writes a BSON ObjectId to the stream.
         /// </summary>
         /// <param name="value">The value.</param>
@@ -232,6 +375,25 @@ namespace MongoDB.Bson.IO
             {
                 var bytes = value.ToByteArray();
                 _stream.Write(bytes, 0, 12);
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously writes a BSON ObjectId to the stream.
+        /// </summary>
+        /// <param name="value">The value.</param>
+        /// <exception cref="System.ArgumentNullException">stream</exception>
+        public Task WriteObjectIdAsync(ObjectId value)
+        {
+            if (_bsonStream != null)
+            {
+                _bsonStream.WriteBsonObjectId(value);
+                return _completedTask;
+            }
+            else
+            {
+                var bytes = value.ToByteArray();
+                return _stream.WriteAsync(bytes, 0, 12);
             }
         }
 
@@ -262,6 +424,36 @@ namespace MongoDB.Bson.IO
                 WriteInt32(bytes.Length + 1);
                 WriteBytes(bytes);
                 WriteByte(0);
+            }
+        }
+
+        /// <summary>
+        /// Asynchronously writes a BSON string to the stream.
+        /// </summary>
+        /// <param name="value">The value.</param>
+        /// 
+        /// <exception cref="System.ArgumentNullException">
+        /// stream
+        /// or
+        /// encoding
+        /// </exception>
+        public async Task WriteStringAsync(string value)
+        {
+            if (value == null)
+            {
+                throw new ArgumentNullException("value");
+            }
+
+            if (_bsonStream != null)
+            {
+                _bsonStream.WriteBsonString(value, _encoding);
+            }
+            else
+            {
+                var bytes = _encoding.GetBytes(value);
+                await WriteInt32Async(bytes.Length + 1);
+                await WriteBytesAsync(bytes);
+                await WriteByteAsync(0);
             }
         }
     }
