@@ -320,16 +320,7 @@ namespace MongoDB.Bson.IO
             }
             else
             {
-                var bytes = new byte[8];
-                bytes[0] = (byte)value;
-                bytes[1] = (byte)(value >> 8);
-                bytes[2] = (byte)(value >> 16);
-                bytes[3] = (byte)(value >> 24);
-                bytes[4] = (byte)(value >> 32);
-                bytes[5] = (byte)(value >> 40);
-                bytes[6] = (byte)(value >> 48);
-                bytes[7] = (byte)(value >> 56);
-                _stream.Write(bytes, 0, 8);
+                _stream.Write(BitConverter.GetBytes(value), 0, 8);
             }
         }
 
@@ -347,16 +338,7 @@ namespace MongoDB.Bson.IO
             }
             else
             {
-                var bytes = new byte[8];
-                bytes[0] = (byte)value;
-                bytes[1] = (byte)(value >> 8);
-                bytes[2] = (byte)(value >> 16);
-                bytes[3] = (byte)(value >> 24);
-                bytes[4] = (byte)(value >> 32);
-                bytes[5] = (byte)(value >> 40);
-                bytes[6] = (byte)(value >> 48);
-                bytes[7] = (byte)(value >> 56);
-                return _stream.WriteAsync(bytes, 0, 8);
+                return _stream.WriteAsync(BitConverter.GetBytes(value), 0, 8);
             }
         }
 
