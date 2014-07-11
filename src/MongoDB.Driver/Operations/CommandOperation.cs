@@ -13,6 +13,7 @@
 * limitations under the License.
 */
 
+using System.Threading.Tasks;
 using MongoDB.Bson;
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization;
@@ -48,14 +49,35 @@ namespace MongoDB.Driver.Operations
 
         public TCommandResult Execute(MongoConnection connection)
         {
-            var maxWireDocumentSize = connection.ServerInstance.MaxWireDocumentSize;
-            var forShardRouter = connection.ServerInstance.InstanceType == MongoServerInstanceType.ShardRouter;
-            var wrappedQuery = WrapQuery(_command, _options, _readPreference, forShardRouter);
-
-            var queryMessage = new MongoQueryMessage(WriterSettings, CollectionFullName, _flags, maxWireDocumentSize, 0, -1, wrappedQuery, null);
+            var queryMessage = PrepareQueryMessage(connection.ServerInstance);
             connection.SendMessage(queryMessage);
 
             var reply = connection.ReceiveMessage<TCommandResult>(ReaderSettings, _serializer);
+            return ProcessCommandResponse(connection.ServerInstance, reply);
+        }
+
+        public async Task<TCommandResult> ExecuteAsync(MongoConnection connection) //TODO: [almaz] Add async counterparts to all usages of CommandOperation.Execute
+        {
+            var queryMessage = PrepareQueryMessage(connection.ServerInstance);
+            await connection.SendMessageAsync(queryMessage).ConfigureAwait(false);
+
+            var reply = await connection.ReceiveMessageAsync<TCommandResult>(ReaderSettings, _serializer).ConfigureAwait(false);
+            return ProcessCommandResponse(connection.ServerInstance, reply);
+        }
+
+        private MongoQueryMessage PrepareQueryMessage(MongoServerInstance mongoServerInstance)
+        {
+            var maxWireDocumentSize = mongoServerInstance.MaxWireDocumentSize;
+            var forShardRouter = mongoServerInstance.InstanceType == MongoServerInstanceType.ShardRouter;
+            var wrappedQuery = WrapQuery(_command, _options, _readPreference, forShardRouter);
+
+            var queryMessage = new MongoQueryMessage(WriterSettings, CollectionFullName, _flags, maxWireDocumentSize, 0, -1,
+                wrappedQuery, null);
+            return queryMessage;
+        }
+
+        private TCommandResult ProcessCommandResponse(MongoServerInstance mongoServerInstance, MongoReplyMessage<TCommandResult> reply)
+        {
             if (reply.NumberReturned == 0)
             {
                 var commandDocument = _command.ToBsonDocument();
@@ -64,14 +86,13 @@ namespace MongoDB.Driver.Operations
                 throw new MongoCommandException(message);
             }
             var commandResult = reply.Documents[0];
-            commandResult.ServerInstance = connection.ServerInstance;
+            commandResult.ServerInstance = mongoServerInstance;
             commandResult.Command = _command;
 
             if (!commandResult.Ok)
             {
                 throw ExceptionMapper.Map(commandResult.Response) ?? new MongoCommandException(commandResult);
             }
-
             return commandResult;
         }
     }
