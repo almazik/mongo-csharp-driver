@@ -14,6 +14,7 @@
 */
 
 using System;
+using System.Threading.Tasks;
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver.Internal;
@@ -45,13 +46,26 @@ namespace MongoDB.Driver.Communication.Security
         {
             try
             {
-                var command = new CommandDocument
-                {
-                    { "authenticate", 1 },
-                    { "mechanism", Name },
-                    { "user", credential.Username }
-                };
-                RunCommand(connection, credential.Source, command);
+                var commandOperation = CreateAuthenticationCommandOperation(credential.Source, CreateAuthenticationCommand(credential));
+                commandOperation.Execute(connection);
+            }
+            catch (MongoCommandException ex)
+            {
+                throw new MongoAuthenticationException(string.Format("Unable to authenticate '{0}' using '{1}'.", credential.Username, Name), ex);
+            }
+        }
+
+        /// <summary>
+        /// Authenticates the specified connection with the given credential.
+        /// </summary>
+        /// <param name="connection">The connection.</param>
+        /// <param name="credential">The credential.</param>
+        public async Task AuthenticateAsync(MongoConnection connection, MongoCredential credential)
+        {
+            try
+            {
+                var commandOperation = CreateAuthenticationCommandOperation(credential.Source, CreateAuthenticationCommand(credential));
+                await commandOperation.ExecuteAsync(connection).ConfigureAwait(false);
             }
             catch (MongoCommandException ex)
             {
@@ -74,7 +88,18 @@ namespace MongoDB.Driver.Communication.Security
         }
 
         // private methods
-        private CommandResult RunCommand(MongoConnection connection, string databaseName, IMongoCommand command)
+        private CommandDocument CreateAuthenticationCommand(MongoCredential credential)
+        {
+            var command = new CommandDocument
+            {
+                {"authenticate", 1},
+                {"mechanism", Name},
+                {"user", credential.Username}
+            };
+            return command;
+        }
+
+        private static CommandOperation<CommandResult> CreateAuthenticationCommandOperation(string databaseName, IMongoCommand command)
         {
             var readerSettings = new BsonBinaryReaderSettings();
             var writerSettings = new BsonBinaryWriterSettings();
@@ -89,8 +114,7 @@ namespace MongoDB.Driver.Communication.Security
                 null, // options
                 null, // readPreference
                 resultSerializer);
-
-            return commandOperation.Execute(connection);
+            return commandOperation;
         }
     }
 }

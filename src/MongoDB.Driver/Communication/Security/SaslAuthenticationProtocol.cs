@@ -13,6 +13,7 @@
 * limitations under the License.
 */
 
+using System.Threading.Tasks;
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver.Internal;
@@ -57,49 +58,48 @@ namespace MongoDB.Driver.Communication.Security
         {
             using (var conversation = new SaslConversation())
             {
-                var currentStep = _mechanism.Initialize(connection, credential);
+                ISaslStep currentStep;
+                var command = CreateSaslStartCommand(connection, credential, out currentStep);
 
-                var command = new CommandDocument
+                CommandResult result;
+                do
                 {
-                    { "saslStart", 1 },
-                    { "mechanism", _mechanism.Name },
-                    { "payload", currentStep.BytesToSendToServer }
-                };
-
-                while (true)
-                {
-                    CommandResult result;
                     try
                     {
                         result = RunCommand(connection, credential.Source, command);
                     }
                     catch (MongoCommandException ex)
                     {
-                        var message = "Unknown error occured during authentication.";
-                        var code = ex.CommandResult.Code;
-                        var errmsg = ex.CommandResult.ErrorMessage;
-                        if(code.HasValue && errmsg != null)
-                        {
-                            message = string.Format("Error: {0} - {1}", code, errmsg);
-                        }
-
-                        throw new MongoSecurityException(message, ex);
+                        throw CreateMongoSecurityException(ex);
                     }
+                } while (!CheckAuthorizationCompleted(result, conversation, ref currentStep, ref command));
+            }
+        }
 
-                    if (result.Response["done"].AsBoolean)
+        /// <summary>
+        /// Asynchronously authenticates the connection against the given database.
+        /// </summary>
+        /// <param name="connection">The connection.</param>
+        /// <param name="credential">The credential.</param>
+        public async Task AuthenticateAsync(MongoConnection connection, MongoCredential credential)
+        {
+            using (var conversation = new SaslConversation())
+            {
+                ISaslStep currentStep;
+                var command = CreateSaslStartCommand(connection, credential, out currentStep);
+
+                CommandResult result;
+                do
+                {
+                    try
                     {
-                        break;
+                        result = await RunCommandAsync(connection, credential.Source, command).ConfigureAwait(false);
                     }
-
-                    currentStep = currentStep.Transition(conversation, result.Response["payload"].AsByteArray);
-
-                    command = new CommandDocument
+                    catch (MongoCommandException ex)
                     {
-                        { "saslContinue", 1 },
-                        { "conversationId", result.Response["conversationId"].AsInt32 },
-                        { "payload", currentStep.BytesToSendToServer }
-                    };
-                }
+                        throw CreateMongoSecurityException(ex);
+                    }
+                } while (!CheckAuthorizationCompleted(result, conversation, ref currentStep, ref command));
             }
         }
 
@@ -116,7 +116,53 @@ namespace MongoDB.Driver.Communication.Security
         }
 
         // private methods
-        private CommandResult RunCommand(MongoConnection connection, string databaseName, IMongoCommand command)
+        private CommandDocument CreateSaslStartCommand(MongoConnection connection, MongoCredential credential,
+            out ISaslStep currentStep)
+        {
+            currentStep = _mechanism.Initialize(connection, credential);
+
+            var command = new CommandDocument
+            {
+                {"saslStart", 1},
+                {"mechanism", _mechanism.Name},
+                {"payload", currentStep.BytesToSendToServer}
+            };
+            return command;
+        }
+        
+        private static MongoSecurityException CreateMongoSecurityException(MongoCommandException ex)
+        {
+            var message = "Unknown error occured during authentication.";
+            var code = ex.CommandResult.Code;
+            var errmsg = ex.CommandResult.ErrorMessage;
+            if (code.HasValue && errmsg != null)
+            {
+                message = string.Format("Error: {0} - {1}", code, errmsg);
+            }
+
+            return new MongoSecurityException(message, ex);
+        }
+
+        private static bool CheckAuthorizationCompleted(CommandResult result, SaslConversation conversation,
+            ref ISaslStep currentStep, ref CommandDocument command)
+        {
+            if (result.Response["done"].AsBoolean)
+            {
+                return true;
+            }
+
+            currentStep = currentStep.Transition(conversation, result.Response["payload"].AsByteArray);
+
+            command = new CommandDocument
+            {
+                {"saslContinue", 1},
+                {"conversationId", result.Response["conversationId"].AsInt32},
+                {"payload", currentStep.BytesToSendToServer}
+            };
+            return false;
+        }
+
+        private static CommandOperation<CommandResult> CreateSaslCommandOperation(string databaseName, IMongoCommand command)
         {
             var readerSettings = new BsonBinaryReaderSettings();
             var writerSettings = new BsonBinaryWriterSettings();
@@ -131,8 +177,21 @@ namespace MongoDB.Driver.Communication.Security
                 null, // options
                 null, // readPreference
                 resultSerializer);
+            return commandOperation;
+        }
+
+        private static CommandResult RunCommand(MongoConnection connection, string databaseName, IMongoCommand command)
+        {
+            var commandOperation = CreateSaslCommandOperation(databaseName, command);
 
             return commandOperation.Execute(connection);
+        }
+
+        private static Task<CommandResult> RunCommandAsync(MongoConnection connection, string databaseName, IMongoCommand command)
+        {
+            var commandOperation = CreateSaslCommandOperation(databaseName, command);
+
+            return commandOperation.ExecuteAsync(connection);
         }
     }
 }

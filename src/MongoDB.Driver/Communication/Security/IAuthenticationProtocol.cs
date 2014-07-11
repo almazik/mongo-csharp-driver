@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using MongoDB.Driver.Internal;
 
 namespace MongoDB.Driver.Communication.Security
@@ -37,6 +38,13 @@ namespace MongoDB.Driver.Communication.Security
         /// <param name="connection">The connection.</param>
         /// <param name="credential">The credential.</param>
         void Authenticate(MongoConnection connection, MongoCredential credential);
+
+        /// <summary>
+        /// Asynchronously authenticates the specified connection with the given credential.
+        /// </summary>
+        /// <param name="connection">The connection.</param>
+        /// <param name="credential">The credential.</param>
+        Task AuthenticateAsync(MongoConnection connection, MongoCredential credential);
 
         /// <summary>
         /// Determines whether this instance can use the specified credential.

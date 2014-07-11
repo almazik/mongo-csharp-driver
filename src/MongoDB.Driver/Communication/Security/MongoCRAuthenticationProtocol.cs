@@ -14,6 +14,7 @@
 */
 
 using System;
+using System.Threading.Tasks;
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver.Internal;
@@ -40,31 +41,35 @@ namespace MongoDB.Driver.Communication.Security
         /// <param name="credential">The credential.</param>
         public void Authenticate(MongoConnection connection, MongoCredential credential)
         {
-            string nonce;
+            var nonce = GetNonce(connection, credential);
+
             try
             {
-                var nonceCommand = new CommandDocument("getnonce", 1);
-                var nonceResult = RunCommand(connection, credential.Source, nonceCommand);
-                nonce = nonceResult.Response["nonce"].AsString;
+                var authenticateCommand = CreateAuthenticateCommand(credential, nonce);
+
+                RunCommand(connection, credential.Source, authenticateCommand);
             }
             catch (MongoCommandException ex)
             {
-                throw new MongoAuthenticationException("Error getting nonce for authentication.", ex);
+                var message = string.Format("Invalid credential for database '{0}'.", credential.Source);
+                throw new MongoAuthenticationException(message, ex);
             }
+        }
+
+        /// <summary>
+        /// Authenticates the connection against the given database.
+        /// </summary>
+        /// <param name="connection">The connection.</param>
+        /// <param name="credential">The credential.</param>
+        public async Task AuthenticateAsync(MongoConnection connection, MongoCredential credential)
+        {
+            var nonce = await GetNonceAsync(connection, credential).ConfigureAwait(false);
 
             try
             {
-                var passwordDigest = ((PasswordEvidence)credential.Evidence).ComputeMongoCRPasswordDigest(credential.Username);
-                var digest = MongoUtils.Hash(nonce + credential.Username + passwordDigest);
-                var authenticateCommand = new CommandDocument
-                {
-                    { "authenticate", 1 },
-                    { "user", credential.Username },
-                    { "nonce", nonce },
-                    { "key", digest }
-                };
+                var authenticateCommand = CreateAuthenticateCommand(credential, nonce);
 
-                RunCommand(connection, credential.Source, authenticateCommand);
+                await RunCommandAsync(connection, credential.Source, authenticateCommand).ConfigureAwait(false);
             }
             catch (MongoCommandException ex)
             {
@@ -87,7 +92,53 @@ namespace MongoDB.Driver.Communication.Security
         }
 
         // private methods
-        private CommandResult RunCommand(MongoConnection connection, string databaseName, IMongoCommand command)
+        private string GetNonce(MongoConnection connection, MongoCredential credential)
+        {
+            string nonce;
+            try
+            {
+                var nonceCommand = new CommandDocument("getnonce", 1);
+                var nonceResult = RunCommand(connection, credential.Source, nonceCommand);
+                nonce = nonceResult.Response["nonce"].AsString;
+            }
+            catch (MongoCommandException ex)
+            {
+                throw new MongoAuthenticationException("Error getting nonce for authentication.", ex);
+            }
+            return nonce;
+        }
+
+        private async Task<string> GetNonceAsync(MongoConnection connection, MongoCredential credential)
+        {
+            string nonce;
+            try
+            {
+                var nonceCommand = new CommandDocument("getnonce", 1);
+                var nonceResult = await RunCommandAsync(connection, credential.Source, nonceCommand).ConfigureAwait(false);
+                nonce = nonceResult.Response["nonce"].AsString;
+            }
+            catch (MongoCommandException ex)
+            {
+                throw new MongoAuthenticationException("Error getting nonce for authentication.", ex);
+            }
+            return nonce;
+        }
+
+        private static CommandDocument CreateAuthenticateCommand(MongoCredential credential, string nonce)
+        {
+            var passwordDigest = ((PasswordEvidence)credential.Evidence).ComputeMongoCRPasswordDigest(credential.Username);
+            var digest = MongoUtils.Hash(nonce + credential.Username + passwordDigest);
+            var authenticateCommand = new CommandDocument
+            {
+                {"authenticate", 1},
+                {"user", credential.Username},
+                {"nonce", nonce},
+                {"key", digest}
+            };
+            return authenticateCommand;
+        }
+
+        private static CommandOperation<CommandResult> CreateAuthenticateCommandOperation(string databaseName, IMongoCommand command)
         {
             var readerSettings = new BsonBinaryReaderSettings();
             var writerSettings = new BsonBinaryWriterSettings();
@@ -102,8 +153,21 @@ namespace MongoDB.Driver.Communication.Security
                 null, // options
                 null, // readPreference
                 resultSerializer);
+            return commandOperation;
+        }
+        
+        private static CommandResult RunCommand(MongoConnection connection, string databaseName, IMongoCommand command)
+        {
+            var commandOperation = CreateAuthenticateCommandOperation(databaseName, command);
 
             return commandOperation.Execute(connection);
+        }
+
+        private static Task<CommandResult> RunCommandAsync(MongoConnection connection, string databaseName, IMongoCommand command)
+        {
+            var commandOperation = CreateAuthenticateCommandOperation(databaseName, command);
+
+            return commandOperation.ExecuteAsync(connection);
         }
     }
 }
