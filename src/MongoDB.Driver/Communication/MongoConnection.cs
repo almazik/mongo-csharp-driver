@@ -19,6 +19,8 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading;
+using System.Threading.Tasks;
 using MongoDB.Bson;
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization;
@@ -52,7 +54,7 @@ namespace MongoDB.Driver.Internal
     public class MongoConnection
     {
         // private fields
-        private readonly object _connectionLock = new object();
+        private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1);
         private readonly MongoServerInstance _serverInstance;
         private readonly MongoConnectionPool _connectionPool;
         private readonly int _generationId; // the generationId of the connection pool at the time this connection was created
@@ -148,27 +150,55 @@ namespace MongoDB.Driver.Internal
         // internal methods
         internal void Close()
         {
-            lock (_connectionLock)
+            _semaphore.Wait();
+            try
             {
-                if (_state != MongoConnectionState.Closed)
+                CloseWithLockAcquired();
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
+        }
+
+        internal async Task CloseAsync()
+        {
+            await _semaphore.WaitAsync();
+            try
+            {
+                CloseWithLockAcquired();
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
+        }
+
+        /// <summary>
+        /// Closes the connection assuming that lock for critical section has already been acquired. Is needed to avoid nested locks as SemaphoreSlim doesn't have such functionality.
+        /// </summary>
+        private void CloseWithLockAcquired()
+        {
+            if (_state != MongoConnectionState.Closed)
+            {
+                if (_stream != null)
                 {
-                    if (_stream != null)
-                    {
-                        try { _stream.Close(); } catch { } // ignore exceptions
-                        _stream = null;
-                    }
-                    if (_tcpClient != null)
-                    {
-                        if (_tcpClient.Connected)
-                        {
-                            // even though MSDN says TcpClient.Close doesn't close the underlying socket
-                            // it actually does (as proven by disassembling TcpClient and by experimentation)
-                            try { _tcpClient.Close(); } catch { } // ignore exceptions
-                        }
-                        _tcpClient = null;
-                    }
-                    _state = MongoConnectionState.Closed;
+                    try { _stream.Close(); }
+                    catch { } // ignore exceptions
+                    _stream = null;
                 }
+                if (_tcpClient != null)
+                {
+                    if (_tcpClient.Connected)
+                    {
+                        // even though MSDN says TcpClient.Close doesn't close the underlying socket
+                        // it actually does (as proven by disassembling TcpClient and by experimentation)
+                        try { _tcpClient.Close(); }
+                        catch { } // ignore exceptions
+                    }
+                    _tcpClient = null;
+                }
+                _state = MongoConnectionState.Closed;
             }
         }
 
@@ -242,49 +272,153 @@ namespace MongoDB.Driver.Internal
                 .Authenticate();
         }
 
+        internal async Task OpenAsync()
+        {
+            if (_state != MongoConnectionState.Initial)
+            {
+                throw new InvalidOperationException("Open called more than once.");
+            }
+
+            var ipEndPoint = _serverInstance.GetIPEndPoint();
+            var tcpClient = new TcpClient(ipEndPoint.AddressFamily)
+            {
+                NoDelay = true,
+                ReceiveBufferSize = MongoDefaults.TcpReceiveBufferSize,
+                SendBufferSize = MongoDefaults.TcpSendBufferSize
+            };
+            await tcpClient.ConnectAsync(ipEndPoint.Address, ipEndPoint.Port).ConfigureAwait(false);
+
+            var stream = (Stream)tcpClient.GetStream();
+            if (_serverInstance.Settings.UseSsl)
+            {
+                var checkCertificateRevocation = true;
+                var clientCertificateCollection = (X509CertificateCollection)null;
+                var clientCertificateSelectionCallback = (LocalCertificateSelectionCallback)null;
+                var enabledSslProtocols = SslProtocols.Default;
+                var serverCertificateValidationCallback = (RemoteCertificateValidationCallback)null;
+
+                var sslSettings = _serverInstance.Settings.SslSettings;
+                if (sslSettings != null)
+                {
+                    checkCertificateRevocation = sslSettings.CheckCertificateRevocation;
+                    clientCertificateCollection = sslSettings.ClientCertificateCollection;
+                    clientCertificateSelectionCallback = sslSettings.ClientCertificateSelectionCallback;
+                    enabledSslProtocols = sslSettings.EnabledSslProtocols;
+                    serverCertificateValidationCallback = sslSettings.ServerCertificateValidationCallback;
+                }
+
+                if (serverCertificateValidationCallback == null && !_serverInstance.Settings.VerifySslCertificate)
+                {
+                    serverCertificateValidationCallback = AcceptAnyCertificate;
+                }
+
+                var sslStream = new SslStream(stream, false, serverCertificateValidationCallback, clientCertificateSelectionCallback);
+                try
+                {
+                    var targetHost = _serverInstance.Address.Host;
+                    await sslStream.AuthenticateAsClientAsync(targetHost, clientCertificateCollection, enabledSslProtocols, checkCertificateRevocation).ConfigureAwait(false);
+                }
+                catch
+                {
+                    try { stream.Close(); }
+                    catch { } // ignore exceptions
+                    try { tcpClient.Close(); }
+                    catch { } // ignore exceptions
+                    throw;
+                }
+                stream = sslStream;
+            }
+
+            _tcpClient = tcpClient;
+            _stream = stream;
+            _state = MongoConnectionState.Open;
+
+            new Authenticator(this, _serverInstance.Settings.Credentials)
+                .Authenticate();
+        }
+
         internal MongoReplyMessage<TDocument> ReceiveMessage<TDocument>(
             BsonBinaryReaderSettings readerSettings,
             IBsonSerializer<TDocument> serializer)
         {
             if (_state == MongoConnectionState.Closed) { throw new InvalidOperationException("Connection is closed."); }
-            lock (_connectionLock)
+            _semaphore.Wait();
+            try
             {
-                try
+                _lastUsedAt = DateTime.UtcNow;
+                var networkStream = GetNetworkStream();
+                var readTimeout = (int)_serverInstance.Settings.SocketTimeout.TotalMilliseconds;
+                if (readTimeout != 0)
                 {
-                    _lastUsedAt = DateTime.UtcNow;
-                    var networkStream = GetNetworkStream();
-                    var readTimeout = (int)_serverInstance.Settings.SocketTimeout.TotalMilliseconds;
-                    if (readTimeout != 0)
-                    {
-                        networkStream.ReadTimeout = readTimeout;
-                    }
+                    networkStream.ReadTimeout = readTimeout;
+                }
 
-                    using (var byteBuffer = ByteBufferFactory.LoadLengthPrefixedDataFrom(networkStream))
-                    using (var stream = new ByteBufferStream(byteBuffer, ownsByteBuffer: true))
-                    {
-                        var reply = new MongoReplyMessage<TDocument>(readerSettings, serializer);
-                        reply.ReadFrom(stream);
-                        return reply;
-                    }
-                }
-                catch (Exception ex)
+                using (var byteBuffer = ByteBufferFactory.LoadLengthPrefixedDataFrom(networkStream))
+                using (var stream = new ByteBufferStream(byteBuffer, ownsByteBuffer: true))
                 {
-                    HandleException(ex);
-                    throw;
+                    var reply = new MongoReplyMessage<TDocument>(readerSettings, serializer);
+                    reply.ReadFrom(stream);
+                    return reply;
                 }
+            }
+            catch (Exception ex)
+            {
+                HandleException(ex);
+                throw;
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
+        }
+
+        internal async Task<MongoReplyMessage<TDocument>> ReceiveMessageAsync<TDocument>(
+            BsonBinaryReaderSettings readerSettings,
+            IBsonSerializer<TDocument> serializer)
+        {
+            if (_state == MongoConnectionState.Closed) { throw new InvalidOperationException("Connection is closed."); }
+
+            await _semaphore.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                _lastUsedAt = DateTime.UtcNow;
+                var networkStream = await GetNetworkStreamAsync().ConfigureAwait(false);
+                var readTimeout = (int)_serverInstance.Settings.SocketTimeout.TotalMilliseconds;
+                if (readTimeout != 0)
+                {
+                    networkStream.ReadTimeout = readTimeout;
+                }
+
+                using (var byteBuffer = await ByteBufferFactory.LoadLengthPrefixedDataFromAsync(networkStream).ConfigureAwait(false))
+                using (var stream = new ByteBufferStream(byteBuffer, ownsByteBuffer: true))
+                {
+                    var reply = new MongoReplyMessage<TDocument>(readerSettings, serializer);
+                    reply.ReadFrom(stream);
+                    return reply;
+                }
+            }
+            catch (Exception ex)
+            {
+                HandleException(ex);
+                throw;
+            }
+            finally
+            {
+                _semaphore.Release();
             }
         }
 
         internal void SendMessage(Stream stream, int requestId)
         {
             if (_state == MongoConnectionState.Closed) { throw new InvalidOperationException("Connection is closed."); }
-            lock (_connectionLock)
+            _semaphore.Wait();
+            try
             {
-                _lastUsedAt = DateTime.UtcNow;
-                _requestId = requestId;
-
                 try
                 {
+                    _lastUsedAt = DateTime.UtcNow;
+                    _requestId = requestId;
+
                     var networkStream = GetNetworkStream();
                     var writeTimeout = (int)_serverInstance.Settings.SocketTimeout.TotalMilliseconds;
                     if (writeTimeout != 0)
@@ -295,11 +429,46 @@ namespace MongoDB.Driver.Internal
                     stream.CopyTo(networkStream);
                     _messageCounter++;
                 }
-                catch (Exception ex)
+                finally
                 {
-                    HandleException(ex);
-                    throw;
+                    _semaphore.Release();
                 }
+            }
+            catch (Exception ex)
+            {
+                HandleException(ex);
+                throw;
+            }
+        }
+
+        internal async Task SendMessageAsync(Stream stream, int requestId)
+        {
+            if (_state == MongoConnectionState.Closed) { throw new InvalidOperationException("Connection is closed."); }
+
+            //Have to use manual Monitor.Enter/Monitor.Exit as await does not work inside lock() statement
+            await _semaphore.WaitAsync().ConfigureAwait(false);
+            _lastUsedAt = DateTime.UtcNow;
+            _requestId = requestId;
+            try
+            {
+                var networkStream = await GetNetworkStreamAsync().ConfigureAwait(false);
+                var writeTimeout = (int)_serverInstance.Settings.SocketTimeout.TotalMilliseconds;
+                if (writeTimeout != 0)
+                {
+                    networkStream.WriteTimeout = writeTimeout;
+                }
+                stream.Position = 0;
+                await stream.CopyToAsync(networkStream).ConfigureAwait(false);
+                _messageCounter++;
+            }
+            catch (Exception ex)
+            {
+                HandleException(ex);
+                throw;
+            }
+            finally
+            {
+                _semaphore.Release();
             }
         }
 
@@ -309,6 +478,15 @@ namespace MongoDB.Driver.Internal
             {
                 message.WriteTo(stream);
                 SendMessage(stream, message.RequestId);
+            }
+        }
+
+        internal async Task SendMessageAsync(MongoRequestMessage message)
+        {
+            using (var stream = new MemoryStream())
+            {
+                message.WriteTo(stream);
+                await SendMessageAsync(stream, message.RequestId).ConfigureAwait(false);
             }
         }
 
@@ -332,6 +510,15 @@ namespace MongoDB.Driver.Internal
             return _stream;
         }
 
+        private async Task<Stream> GetNetworkStreamAsync()
+        {
+            if (_state == MongoConnectionState.Initial)
+            {
+                await OpenAsync().ConfigureAwait(false);
+            }
+            return _stream;
+        }
+
         private void HandleException(Exception ex)
         {
             // there are three possible situations:
@@ -344,13 +531,13 @@ namespace MongoDB.Driver.Internal
                 case HandleExceptionAction.KeepConnection:
                     break;
                 case HandleExceptionAction.CloseConnection:
-                    Close();
+                    CloseWithLockAcquired(); //HandleException is always called from within critical section, so we don't acquire the lock
                     break;
                 case HandleExceptionAction.ClearConnectionPool:
-                    Close();
+                    CloseWithLockAcquired();
                     if (_connectionPool != null)
                     {
-                        _connectionPool.Clear();
+                        _connectionPool.Clear(); //For now will use synchronous method, given that DetermineAction always returns CloseConnection
                     }
                     break;
                 default:
